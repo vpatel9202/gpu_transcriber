@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gpu-video-transcriber"
+version = "1.0.0"
+description = "A GPU-optimized bulk video transcription tool using Whisper."
+readme = "gpu_transcriber_app/README.md"
+requires-python = ">=3.9"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+# All dependencies are listed here
+dependencies = [
+    "click",
+    "torch",
+    "tqdm",
+    "ffmpeg-python",
+    "psutil",
+    "faster-whisper",
+    "openai-whisper",
+    "pyannote.audio",
+    "librosa",
+    "numpy",
+    "speechbrain"
+]
+
+[project.urls]
+"Homepage" = "https://github.com/VyanP/gpu_transcriber"
+
+# This creates the command-line tool
+[project.scripts]
+gpu-transcriber = "gpu_transcriber_app.cli:main"
