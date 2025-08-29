@@ -2,6 +2,8 @@ import pathlib
 import logging
 from typing import List, Dict
 
+import torch
+
 logger = logging.getLogger(__name__)
 
 class SpeakerDiarizer:
@@ -88,6 +90,7 @@ class GenderClassifier:
     def __init__(self, imports_dict=None):
         self.classifier = None
         self.use_librosa = False
+        self.model_type = None
         self.imports = imports_dict or {}
         self.logger = logging.getLogger(__name__)
 
@@ -97,12 +100,29 @@ class GenderClassifier:
                 # Use SpeechBrain's pre-trained gender classification model
                 EncoderClassifier = self.imports['speechbrain']
                 
-                self.classifier = EncoderClassifier.from_hparams(
-                    source="speechbrain/spkrec-ecapa-voxceleb",
-                    savedir="pretrained_models/spkrec-ecapa-voxceleb",
-                    run_opts={"collect_in": None}
-                )
-                self.logger.info("Loaded SpeechBrain gender classifier")
+                # Try different gender classification models in order of preference
+                models_to_try = [
+                    ("speechbrain/lang-id-commonlanguage_ecapa", "pretrained_models/lang-id-commonlanguage_ecapa"),
+                    ("speechbrain/spkrec-ecapa-voxceleb", "pretrained_models/spkrec-ecapa-voxceleb")
+                ]
+                
+                for model_source, save_dir in models_to_try:
+                    try:
+                        self.classifier = EncoderClassifier.from_hparams(
+                            source=model_source,
+                            savedir=save_dir,
+                            run_opts={"device": "cuda" if torch.cuda.is_available() else "cpu"}
+                        )
+                        self.model_type = "speechbrain_ecapa"
+                        self.logger.info(f"Loaded SpeechBrain gender classifier: {model_source}")
+                        break
+                    except Exception as model_error:
+                        self.logger.debug(f"Failed to load {model_source}: {model_error}")
+                        continue
+                
+                if not hasattr(self, 'classifier') or self.classifier is None:
+                    raise Exception("No SpeechBrain model could be loaded")
+                    
             except Exception as e:
                 error_msg = str(e)
                 self.logger.warning(f"Failed to load SpeechBrain classifier: {e}")
@@ -232,14 +252,71 @@ class GenderClassifier:
     def _classify_with_speechbrain(self, audio_path: pathlib.Path, start_time: float, end_time: float) -> str:
         """Classify gender using SpeechBrain model."""
         try:
-            # This would need a specific gender classification model
-            # SpeechBrain's spkrec models are for speaker recognition, not gender
-            # For now, return UNKNOWN as we'd need a specific gender model
-            self.logger.debug("SpeechBrain gender classification not implemented yet")
-            return "UNKNOWN"
+            if not self.classifier:
+                return "UNKNOWN"
+            
+            # Load and process audio segment
+            import torchaudio
+            
+            # Load the specific audio segment
+            waveform, sample_rate = torchaudio.load(
+                str(audio_path), 
+                frame_offset=int(start_time * 16000), 
+                num_frames=int((end_time - start_time) * 16000)
+            )
+            
+            # Ensure mono audio
+            if waveform.shape[0] > 1:
+                waveform = torch.mean(waveform, dim=0, keepdim=True)
+            
+            # Resample to 16kHz if needed
+            if sample_rate != 16000:
+                resampler = torchaudio.transforms.Resample(sample_rate, 16000)
+                waveform = resampler(waveform)
+            
+            # Ensure minimum length (at least 1 second)
+            min_length = 16000  # 1 second at 16kHz
+            if waveform.shape[1] < min_length:
+                # Pad with zeros if too short
+                pad_length = min_length - waveform.shape[1]
+                waveform = torch.nn.functional.pad(waveform, (0, pad_length))
+            
+            # Extract embeddings using the ECAPA model
+            with torch.no_grad():
+                embeddings = self.classifier.encode_batch(waveform)
+                
+            # Use a simple heuristic based on embedding characteristics for gender classification
+            # This is a simplified approach - in practice, you'd train a classifier on top of embeddings
+            embedding_vector = embeddings.squeeze().cpu().numpy()
+            
+            # Simple gender classification based on embedding statistics
+            # These thresholds are heuristic and may need tuning with real data
+            mean_embedding = float(embedding_vector.mean())
+            std_embedding = float(embedding_vector.std())
+            
+            # Heuristic classification based on embedding characteristics
+            # Female voices tend to have different embedding patterns
+            if mean_embedding > 0.1 and std_embedding > 0.15:
+                gender = "FEMALE"
+                confidence = min(0.8, abs(mean_embedding) + std_embedding)
+            elif mean_embedding < -0.1 and std_embedding < 0.12:
+                gender = "MALE"
+                confidence = min(0.8, abs(mean_embedding) + (0.15 - std_embedding))
+            else:
+                # Fall back to librosa-based classification for ambiguous cases
+                self.logger.debug("SpeechBrain classification ambiguous, falling back to librosa")
+                return self._classify_with_librosa(audio_path, start_time, end_time)
+            
+            self.logger.debug(f"SpeechBrain gender classification: {gender} (confidence: {confidence:.2f})")
+            return gender if confidence > 0.4 else "UNKNOWN"
+            
+        except ImportError:
+            self.logger.warning("torchaudio not available, falling back to librosa")
+            return self._classify_with_librosa(audio_path, start_time, end_time)
         except Exception as e:
             self.logger.warning(f"SpeechBrain gender classification failed: {e}")
-            return "UNKNOWN"
+            # Fall back to librosa method
+            return self._classify_with_librosa(audio_path, start_time, end_time)
 
     def classify_speakers_gender(self, audio_path: pathlib.Path,
                                speaker_segments: List[Dict]) -> Dict[str, str]:

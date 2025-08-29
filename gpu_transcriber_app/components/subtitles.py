@@ -250,6 +250,55 @@ class SubtitleGenerator:
         return broken_segments
 
     @staticmethod
+    def _create_gender_speaker_mapping(segments: List[Dict]) -> Dict[str, str]:
+        """Create a mapping from speaker IDs to gender-based labels (e.g., FEMALE 01, MALE 01)."""
+        speaker_genders = {}
+        gender_counters = {"MALE": 0, "FEMALE": 0, "UNKNOWN": 0}
+        speaker_map = {}
+        
+        # First pass: collect all unique speakers and their genders
+        for segment in segments:
+            speaker = segment.get('speaker')
+            gender = segment.get('gender', 'UNKNOWN')
+            
+            if speaker and speaker not in speaker_genders:
+                # Determine the most common gender for this speaker
+                speaker_genders[speaker] = gender if gender != 'UNKNOWN' else 'UNKNOWN'
+        
+        # Second pass: assign gender-based labels
+        for speaker, gender in speaker_genders.items():
+            if gender in ['MALE', 'FEMALE']:
+                gender_counters[gender] += 1
+                speaker_map[speaker] = f"{gender} {gender_counters[gender]:02d}"
+            else:
+                # For unknown gender, just use SPEAKER designation
+                gender_counters["UNKNOWN"] += 1
+                speaker_map[speaker] = f"SPEAKER {gender_counters['UNKNOWN']:02d}"
+        
+        return speaker_map
+    
+    @staticmethod
+    def _get_gender_label(segment: Dict, speaker_map: Dict[str, str]) -> Optional[str]:
+        """Get the appropriate gender-based label for a segment."""
+        speaker = segment.get('speaker')
+        gender = segment.get('gender')
+        
+        # If we have a speaker and it's in our mapping, use that
+        if speaker and speaker in speaker_map:
+            return speaker_map[speaker]
+        
+        # If no speaker but we have gender, create a simple label
+        if gender and gender in ['MALE', 'FEMALE']:
+            return gender
+        
+        # If we have a speaker but no mapping (shouldn't happen), use speaker name
+        if speaker:
+            return speaker
+        
+        # No useful information
+        return None
+
+    @staticmethod
     def assign_speakers(transcription_segments: List[Dict],
                        diarization_segments: List[Dict]) -> List[Dict]:
         """Assign speakers to transcription segments based on diarization."""
@@ -310,6 +359,9 @@ class SubtitleGenerator:
     @staticmethod
     def generate_srt(segments: List[Dict]) -> str:
         """Generate SRT format subtitle."""
+        # Create gender-based speaker mapping
+        speaker_map = SubtitleGenerator._create_gender_speaker_mapping(segments)
+        
         srt_content = []
         for i, segment in enumerate(segments, 1):
             start_time = SubtitleGenerator.format_timestamp(segment['start'], "srt")
@@ -317,12 +369,8 @@ class SubtitleGenerator:
             text = segment['text'].strip()
 
             if text:  # Only add non-empty segments
-                # Add gender label if available, otherwise use speaker label
-                label = None
-                if segment.get('gender') and segment.get('gender') != 'UNKNOWN':
-                    label = segment['gender']
-                elif segment.get('speaker'):
-                    label = segment['speaker']
+                # Get gender-based label
+                label = SubtitleGenerator._get_gender_label(segment, speaker_map)
 
                 if label:
                     text = f"[{label}] {text}"
@@ -334,6 +382,9 @@ class SubtitleGenerator:
     @staticmethod
     def generate_vtt(segments: List[Dict]) -> str:
         """Generate WebVTT format subtitle."""
+        # Create gender-based speaker mapping
+        speaker_map = SubtitleGenerator._create_gender_speaker_mapping(segments)
+        
         vtt_content = ["WEBVTT", ""]
 
         for segment in segments:
@@ -342,6 +393,11 @@ class SubtitleGenerator:
             text = segment['text'].strip()
 
             if text:
+                # Get gender-based label
+                label = SubtitleGenerator._get_gender_label(segment, speaker_map)
+                if label:
+                    text = f"[{label}] {text}"
+                
                 vtt_content.append(f"{start_time} --> {end_time}")
                 vtt_content.append(f"{text}")
                 vtt_content.append("")
