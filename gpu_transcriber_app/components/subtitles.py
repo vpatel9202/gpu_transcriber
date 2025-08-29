@@ -252,29 +252,57 @@ class SubtitleGenerator:
     @staticmethod
     def _create_gender_speaker_mapping(segments: List[Dict]) -> Dict[str, str]:
         """Create a mapping from speaker IDs to gender-based labels (e.g., FEMALE 01, MALE 01)."""
-        speaker_genders = {}
+        from collections import defaultdict, Counter
+        
+        # Collect all genders for each speaker
+        speaker_genders_all = defaultdict(list)
+        
+        # First pass: collect all genders for each speaker
+        for segment in segments:
+            speaker = segment.get('speaker')
+            gender = segment.get('gender')
+            
+            if speaker:
+                speaker_genders_all[speaker].append(gender)
+        
+        # Determine the best gender for each speaker
+        speaker_final_genders = {}
+        for speaker, genders in speaker_genders_all.items():
+            # Count occurrences of each gender
+            gender_counts = Counter(genders)
+            
+            # Remove None/UNKNOWN from consideration if there are other options
+            valid_genders = [g for g in genders if g and g != 'UNKNOWN']
+            if valid_genders:
+                # Use the most common valid gender
+                gender_counts_valid = Counter(valid_genders)
+                best_gender = gender_counts_valid.most_common(1)[0][0]
+            else:
+                # All are unknown, use UNKNOWN
+                best_gender = 'UNKNOWN'
+            
+            speaker_final_genders[speaker] = best_gender
+        
+        # Create gender-based numbering
         gender_counters = {"MALE": 0, "FEMALE": 0, "UNKNOWN": 0}
         speaker_map = {}
         
-        # First pass: collect all unique speakers and their genders
-        for segment in segments:
-            speaker = segment.get('speaker')
-            gender = segment.get('gender', 'UNKNOWN')
-            
-            if speaker and speaker not in speaker_genders:
-                # Determine the most common gender for this speaker
-                speaker_genders[speaker] = gender if gender != 'UNKNOWN' else 'UNKNOWN'
+        # Sort speakers to ensure consistent numbering
+        sorted_speakers = sorted(speaker_final_genders.keys())
         
-        # Second pass: assign gender-based labels
-        for speaker, gender in speaker_genders.items():
+        for speaker in sorted_speakers:
+            gender = speaker_final_genders[speaker]
+            
             if gender in ['MALE', 'FEMALE']:
                 gender_counters[gender] += 1
                 speaker_map[speaker] = f"{gender} {gender_counters[gender]:02d}"
             else:
-                # For unknown gender, just use SPEAKER designation
+                # For unknown gender, use SPEAKER designation
                 gender_counters["UNKNOWN"] += 1
                 speaker_map[speaker] = f"SPEAKER {gender_counters['UNKNOWN']:02d}"
         
+        # Debug logging (temporarily using INFO to see in output)
+        logger.info(f"Speaker gender mapping created: {speaker_map}")
         return speaker_map
     
     @staticmethod
@@ -283,19 +311,27 @@ class SubtitleGenerator:
         speaker = segment.get('speaker')
         gender = segment.get('gender')
         
+        # Debug logging (temporarily using INFO to see in output)
+        logger.info(f"Getting label for speaker='{speaker}', gender='{gender}', map has speaker: {speaker in speaker_map if speaker else False}")
+        
         # If we have a speaker and it's in our mapping, use that
         if speaker and speaker in speaker_map:
-            return speaker_map[speaker]
+            label = speaker_map[speaker]
+            logger.info(f"Using mapped label: '{label}' for speaker '{speaker}'")
+            return label
         
         # If no speaker but we have gender, create a simple label
         if gender and gender in ['MALE', 'FEMALE']:
+            logger.debug(f"Using simple gender label: '{gender}'")
             return gender
         
         # If we have a speaker but no mapping (shouldn't happen), use speaker name
         if speaker:
+            logger.debug(f"Fallback to speaker name: '{speaker}'")
             return speaker
         
         # No useful information
+        logger.debug("No label information available")
         return None
 
     @staticmethod
@@ -361,6 +397,11 @@ class SubtitleGenerator:
         """Generate SRT format subtitle."""
         # Create gender-based speaker mapping
         speaker_map = SubtitleGenerator._create_gender_speaker_mapping(segments)
+        logger.info(f"Generated speaker mapping: {speaker_map}")
+        
+        # Debug: Check a few segments
+        for i, segment in enumerate(segments[:3]):
+            logger.info(f"Sample segment {i}: speaker='{segment.get('speaker')}', gender='{segment.get('gender')}'")
         
         srt_content = []
         for i, segment in enumerate(segments, 1):
