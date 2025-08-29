@@ -413,13 +413,10 @@ class BulkTranscriber:
                 if self.processed_count % 10 == 0:
                     self.engine.memory_manager.clear_cache()
 
-        # Cleanup temp directory
-        try:
-            for temp_file in self.temp_dir.glob("*", recursive=True):
-                temp_file.unlink()
-            self.temp_dir.rmdir()
-        except Exception as e:
-            logger.warning(f"Could not clean up temp directory: {e}")
+        # Comprehensive cleanup of temp files and symlinks
+        self._cleanup_all_temp_files()
+
+        # Generate detailed summary
 
         # Generate detailed summary
         total_time = time.time() - self.start_time
@@ -459,3 +456,88 @@ class BulkTranscriber:
             'created_files': sorted(set(all_created_files)),
             'all_errors': all_errors
         }
+
+    def _cleanup_all_temp_files(self):
+        """Comprehensive cleanup of temporary files and symlinks."""
+        import shutil
+        import platform
+        
+        cleanup_paths = []
+        
+        # 1. Clean up temp transcription directory
+        if self.temp_dir.exists():
+            cleanup_paths.append(("Temp audio files", self.temp_dir))
+        
+        # 2. Clean up any broken symlinks in pretrained_models
+        pretrained_dir = pathlib.Path("pretrained_models")
+        if pretrained_dir.exists():
+            cleanup_paths.append(("Pretrained models cache", pretrained_dir))
+        
+        # 3. On Windows, also check for orphaned symlinks
+        if platform.system() == "Windows":
+            # Look for common cache directories that might have broken symlinks
+            possible_cache_dirs = [
+                pathlib.Path.home() / ".cache" / "huggingface",
+                pathlib.Path.home() / ".cache" / "speechbrain_models",
+            ]
+            for cache_dir in possible_cache_dirs:
+                if cache_dir.exists():
+                    cleanup_paths.append(("HF/SpeechBrain cache", cache_dir))
+        
+        for description, path in cleanup_paths:
+            try:
+                if path == self.temp_dir:
+                    # Special handling for temp directory - remove all contents
+                    if path.exists():
+                        logger.debug(f"Cleaning up {description}: {path}")
+                        shutil.rmtree(path, ignore_errors=True)
+                        logger.info(f"✅ Cleaned up {description}")
+                else:
+                    # For other directories, just clean broken symlinks and temp files
+                    self._clean_broken_symlinks(path, description)
+                        
+            except Exception as e:
+                logger.warning(f"Could not clean up {description} at {path}: {e}")
+    
+    def _clean_broken_symlinks(self, directory: pathlib.Path, description: str):
+        """Remove broken symlinks from a directory."""
+        if not directory.exists():
+            return
+            
+        broken_links = []
+        temp_files = []
+        
+        try:
+            for item in directory.rglob("*"):
+                if item.is_symlink() and not item.exists():
+                    # Broken symlink
+                    broken_links.append(item)
+                elif item.name.startswith(('.tmp', 'tmp_', 'temp_')):
+                    # Temp files
+                    temp_files.append(item)
+            
+            # Remove broken symlinks
+            for link in broken_links:
+                try:
+                    link.unlink()
+                    logger.debug(f"Removed broken symlink: {link}")
+                except Exception as e:
+                    logger.debug(f"Could not remove broken symlink {link}: {e}")
+            
+            # Remove temp files
+            for temp_file in temp_files:
+                try:
+                    if temp_file.is_file():
+                        temp_file.unlink()
+                    elif temp_file.is_dir():
+                        import shutil
+                        shutil.rmtree(temp_file, ignore_errors=True)
+                    logger.debug(f"Removed temp file: {temp_file}")
+                except Exception as e:
+                    logger.debug(f"Could not remove temp file {temp_file}: {e}")
+            
+            if broken_links or temp_files:
+                logger.info(f"✅ Cleaned up {len(broken_links)} broken symlinks and {len(temp_files)} temp files from {description}")
+                
+        except Exception as e:
+            logger.debug(f"Error during cleanup of {description}: {e}")

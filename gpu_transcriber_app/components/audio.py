@@ -96,13 +96,27 @@ class GenderClassifier:
             try:
                 # Use SpeechBrain's pre-trained gender classification model
                 EncoderClassifier = self.imports['speechbrain']
+                
                 self.classifier = EncoderClassifier.from_hparams(
                     source="speechbrain/spkrec-ecapa-voxceleb",
-                    savedir="pretrained_models/spkrec-ecapa-voxceleb"
+                    savedir="pretrained_models/spkrec-ecapa-voxceleb",
+                    run_opts={"collect_in": None}
                 )
                 self.logger.info("Loaded SpeechBrain gender classifier")
             except Exception as e:
+                error_msg = str(e)
                 self.logger.warning(f"Failed to load SpeechBrain classifier: {e}")
+                
+                # Check if this is a Windows symlink permission issue
+                if "WinError 1314" in error_msg or "required privilege is not held" in error_msg.lower():
+                    import platform
+                    if platform.system() == "Windows":
+                        self.logger.warning("⚠️  SpeechBrain requires elevated privileges on Windows for symlink creation.")
+                        self.logger.warning("💡 Solutions:")
+                        self.logger.warning("   1. Run this terminal as Administrator, or")
+                        self.logger.warning("   2. Enable Windows Developer Mode (Settings > Update & Security > For developers)")
+                        self.logger.warning("   3. Gender classification will fall back to librosa-only mode (less accurate)")
+                
                 self.classifier = None
 
         # Fallback to librosa-based approach
@@ -134,7 +148,7 @@ class GenderClassifier:
             np = self.imports.get('numpy')
             if not librosa or not np:
                 return "UNKNOWN"
-            
+
             y, sr = librosa.load(str(audio_path), offset=start_time, duration=end_time-start_time)
 
             if len(y) < sr * 0.5:  # Need at least 0.5 seconds

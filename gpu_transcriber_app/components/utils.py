@@ -11,27 +11,66 @@ import torch
 
 from ..config import TranscriptionConfig, FileConflictMode
 
+class ColoredFormatter(logging.Formatter):
+    """Custom formatter that adds colors to log levels."""
+    
+    # ANSI color codes
+    COLORS = {
+        'DEBUG': '\033[36m',     # Cyan
+        'INFO': '\033[32m',      # Green  
+        'WARNING': '\033[33m',   # Orange/Yellow
+        'ERROR': '\033[31m',     # Red
+        'CRITICAL': '\033[35m'   # Magenta
+    }
+    RESET = '\033[0m'  # Reset color
+    
+    def format(self, record):
+        # Get the original formatted message
+        formatted = super().format(record)
+        
+        # Add color based on log level
+        if record.levelname in self.COLORS:
+            color = self.COLORS[record.levelname]
+            # Only colorize the level name, not the entire message
+            formatted = formatted.replace(
+                f"- {record.levelname} -", 
+                f"- {color}{record.levelname}{self.RESET} -"
+            )
+        
+        return formatted
+
 def setup_logging(verbose: bool = False):
-    """Setup logging with appropriate level and format."""
+    """Setup logging with appropriate level, format, and colors."""
     log_level = logging.DEBUG if verbose else logging.INFO
 
     # Create formatters
     detailed_formatter = logging.Formatter(
         '%(asctime)s - %(name)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s'
     )
+    
+    # Colored formatter for console output
+    colored_formatter = ColoredFormatter(
+        '%(asctime)s - %(levelname)s - %(message)s'
+    )
+    
+    # Simple formatter for file output (no colors)
     simple_formatter = logging.Formatter(
         '%(asctime)s - %(levelname)s - %(message)s'
     )
 
-    # File handler with detailed logging
+    # File handler with detailed logging (no colors)
     file_handler = logging.FileHandler('transcription_detailed.log', encoding='utf-8')
     file_handler.setLevel(logging.DEBUG)
     file_handler.setFormatter(detailed_formatter)
 
-    # Console handler with simpler format
+    # Console handler with colored output
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setLevel(log_level)
-    console_handler.setFormatter(simple_formatter)
+    # Use colored formatter only if stdout is a terminal (supports colors)
+    if sys.stdout.isatty():
+        console_handler.setFormatter(colored_formatter)
+    else:
+        console_handler.setFormatter(simple_formatter)
 
     # Setup logger
     logger = logging.getLogger("gpu_transcriber_app")

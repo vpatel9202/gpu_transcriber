@@ -4,6 +4,13 @@ import torch
 import psutil
 import pathlib
 import logging
+import os
+import warnings
+
+# Set environment variables early to prevent Windows symlink permission issues
+# This must be done before any SpeechBrain imports occur
+os.environ['HF_HUB_CACHE_STRATEGY'] = 'copy'
+os.environ['SPEECHBRAIN_CACHE_STRATEGY'] = 'copy'
 
 from .config import TranscriptionConfig, FileConflictMode
 from .transcriber import BulkTranscriber
