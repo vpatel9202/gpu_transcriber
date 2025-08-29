@@ -38,6 +38,63 @@ def check_dependencies():
 
     return missing_deps
 
+def _check_faster_whisper_cuda_support() -> bool:
+    """Check if faster-whisper installation includes CUDA support."""
+    try:
+        # Method 1: Try to import CTranslate2 and check for CUDA
+        try:
+            import ctranslate2
+            cuda_available = ctranslate2.get_cuda_device_count() > 0
+            if cuda_available:
+                return True
+        except (ImportError, AttributeError):
+            pass
+        
+        # Method 2: Check if faster-whisper can create a CUDA model
+        try:
+            from faster_whisper import WhisperModel
+            # Try to instantiate a small model on CUDA
+            test_model = WhisperModel("tiny", device="cuda", compute_type="float16")
+            # If we get here without exception, CUDA support is available
+            del test_model
+            return True
+        except Exception:
+            pass
+        
+        # Method 3: Check package metadata for CUDA extras
+        try:
+            import pkg_resources
+            import importlib.metadata
+            
+            # Check if installed with [cuda] extra
+            try:
+                dist = importlib.metadata.distribution('faster-whisper')
+                if dist:
+                    # This is a heuristic - the presence of ctranslate2 dependency suggests CUDA variant
+                    requires = dist.requires or []
+                    for req in requires:
+                        if 'ctranslate2' in req and 'cuda' in req.lower():
+                            return True
+            except Exception:
+                pass
+            
+            # Fallback: check if ctranslate2 is installed (usually means CUDA variant)
+            try:
+                import ctranslate2
+                return True
+            except ImportError:
+                return False
+                
+        except ImportError:
+            # No metadata available, assume CPU-only
+            return False
+        
+        return False
+        
+    except Exception:
+        # If we can't determine, assume no CUDA support
+        return False
+
 def import_optional_dependencies(enable_diarization: bool = False, enable_gender: bool = False, hf_token: str | None = None):
     """Import optional dependencies only when needed."""
     imports = {}
@@ -46,8 +103,14 @@ def import_optional_dependencies(enable_diarization: bool = False, enable_gender
     try:
         from faster_whisper import WhisperModel, BatchedInferencePipeline
         imports['faster_whisper'] = (WhisperModel, BatchedInferencePipeline)
+        
+        # Check if faster-whisper has CUDA support
+        cuda_support = _check_faster_whisper_cuda_support()
+        imports['faster_whisper_cuda'] = cuda_support
+        
     except ImportError:
         imports['faster_whisper'] = None
+        imports['faster_whisper_cuda'] = False
 
     try:
         import whisper
@@ -187,6 +250,19 @@ def main(input_path, model, language, output_format, embed, device, batch_size,
     # System info
     click.echo(f"🔧 CPU Cores: {psutil.cpu_count()}")
     click.echo(f"💾 RAM: {psutil.virtual_memory().total // 1024**3}GB")
+    
+    # Report faster-whisper variant
+    if imports.get('faster_whisper'):
+        cuda_support = imports.get('faster_whisper_cuda', False)
+        if cuda_support:
+            click.echo("📦 faster-whisper: CUDA variant detected ✅")
+        else:
+            click.echo("📦 faster-whisper: CPU-only variant detected")
+            if device == 'cuda':
+                click.echo("⚠️  Warning: GPU requested but faster-whisper lacks CUDA support")
+                click.echo("💡 Install CUDA version: pip install faster-whisper[cuda]")
+    elif imports.get('openai_whisper'):
+        click.echo("📦 Using OpenAI Whisper")
 
     # Create configuration
     config = TranscriptionConfig(
@@ -221,6 +297,23 @@ def main(input_path, model, language, output_format, embed, device, batch_size,
         # Initialize transcriber
         click.echo("🤖 Initializing transcription engine...")
         transcriber = BulkTranscriber(config, imports, hf_token)
+        
+        # Report final GPU usage status
+        if config.device == "cuda":
+            try:
+                allocated = torch.cuda.memory_allocated(0)
+                if allocated > 0:
+                    click.echo(f"✅ GPU is being used: {allocated // 1024**2}MB allocated")
+                else:
+                    click.echo("⚠️  Warning: GPU selected but no memory allocated")
+                    click.echo("💡 Possible solutions:")
+                    click.echo("   • Install CUDA-enabled faster-whisper: pip install faster-whisper[cuda]")
+                    click.echo("   • Check CUDA installation: nvidia-smi")
+                    click.echo("   • Try smaller model first: --model medium")
+            except Exception:
+                click.echo("⚠️  Warning: Could not verify GPU usage")
+        else:
+            click.echo("ℹ️  Using CPU mode")
 
         # Process videos
         input_path = pathlib.Path(input_path).resolve()

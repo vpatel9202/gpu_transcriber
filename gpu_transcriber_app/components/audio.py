@@ -26,8 +26,38 @@ class SpeakerDiarizer:
                 for model_name in models_to_try:
                     try:
                         logger.info(f"Attempting to load {model_name}")
-                        self.pipeline = Pipeline.from_pretrained(model_name, use_auth_token=self.hf_token)
-                        logger.info(f"Successfully loaded {model_name}")
+                        
+                        # Determine device for diarization
+                        device = "cuda" if torch.cuda.is_available() else "cpu"
+                        if device == "cuda":
+                            try:
+                                # Test GPU allocation
+                                test_tensor = torch.zeros(10, 10, device="cuda")
+                                del test_tensor
+                                torch.cuda.empty_cache()
+                                logger.info(f"🚀 Loading diarization model on GPU")
+                            except Exception as gpu_error:
+                                logger.warning(f"⚠️  GPU test failed for diarization: {gpu_error}")
+                                device = "cpu"
+                                logger.info(f"🔄 Falling back to CPU for diarization")
+                        else:
+                            logger.info(f"🔄 Loading diarization model on CPU")
+                        
+                        # Load with device specification
+                        self.pipeline = Pipeline.from_pretrained(
+                            model_name, 
+                            use_auth_token=self.hf_token
+                        )
+                        
+                        # Move to device if CUDA is available
+                        if hasattr(self.pipeline, 'to') and device == "cuda":
+                            try:
+                                self.pipeline.to(torch.device("cuda"))
+                                logger.info(f"✅ Diarization model moved to GPU")
+                            except Exception as e:
+                                logger.warning(f"⚠️  Could not move diarization model to GPU: {e}")
+                        
+                        logger.info(f"✅ Successfully loaded {model_name} on {device.upper()}")
                         break
                     except Exception as e:
                         logger.debug(f"Failed to load {model_name}: {e}")
@@ -91,6 +121,7 @@ class GenderClassifier:
         self.classifier = None
         self.use_librosa = False
         self.model_type = None
+        self.device = None
         self.imports = imports_dict or {}
         self.logger = logging.getLogger(__name__)
 
@@ -108,13 +139,30 @@ class GenderClassifier:
                 
                 for model_source, save_dir in models_to_try:
                     try:
+                        # Determine device and validate GPU if needed
+                        device = "cuda" if torch.cuda.is_available() else "cpu"
+                        if device == "cuda":
+                            try:
+                                # Test GPU allocation
+                                test_tensor = torch.zeros(10, 10, device="cuda")
+                                del test_tensor
+                                torch.cuda.empty_cache()
+                                self.logger.info(f"🚀 Loading SpeechBrain model on GPU: {model_source}")
+                            except Exception as gpu_error:
+                                self.logger.warning(f"⚠️  GPU test failed for SpeechBrain: {gpu_error}")
+                                device = "cpu"
+                                self.logger.info(f"🔄 Falling back to CPU for SpeechBrain: {model_source}")
+                        else:
+                            self.logger.info(f"🔄 Loading SpeechBrain model on CPU: {model_source}")
+                        
                         self.classifier = EncoderClassifier.from_hparams(
                             source=model_source,
                             savedir=save_dir,
-                            run_opts={"device": "cuda" if torch.cuda.is_available() else "cpu"}
+                            run_opts={"device": device}
                         )
                         self.model_type = "speechbrain_ecapa"
-                        self.logger.info(f"Loaded SpeechBrain gender classifier: {model_source}")
+                        self.device = device
+                        self.logger.info(f"✅ Loaded SpeechBrain gender classifier on {device.upper()}: {model_source}")
                         break
                     except Exception as model_error:
                         self.logger.debug(f"Failed to load {model_source}: {model_error}")
